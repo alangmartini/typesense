@@ -179,6 +179,8 @@ struct collection_search_args_t {
     static constexpr auto PERSONALIZATION_EVENT_NAME = "personalization_event_name";
     static constexpr auto PERSONALIZATION_N_EVENTS = "personalization_n_events";
 
+    static constexpr auto CLUSTER_RADIUS = "cluster_radius";
+
     std::string raw_query;
     std::vector<std::string> search_fields;
     std::string filter_query;
@@ -262,6 +264,8 @@ struct collection_search_args_t {
     std::string personalization_item_field;
     std::string personalization_event_name;
     size_t personalization_n_events;
+    
+    std::string cluster_radius;
 
     std::vector<std::vector<KV*>> result_group_kvs{};
 

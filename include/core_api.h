@@ -27,6 +27,8 @@ bool get_collection_summary(const std::shared_ptr<http_req>& req, const std::sha
 
 bool get_search(const std::shared_ptr<http_req>& req, const std::shared_ptr<http_res>& res);
 
+void apply_geosearch_clustering(nlohmann::json& results_json, const std::string& cluster_radius);
+
 bool post_multi_search(const std::shared_ptr<http_req>& req, const std::shared_ptr<http_res>& res);
 
 bool get_export_documents(const std::shared_ptr<http_req>& req, const std::shared_ptr<http_res>& res);

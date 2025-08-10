@@ -3,16 +3,7 @@
 # 2) docker volume create typesense-bazel-cache
 # 3) docker build -t typesense-builder -f docker/development-macos.Dockerfile .
 
-# Build & Run typesense-server:
-#    docker run -p 8108:8108 \
-#                 -v "$(pwd)":/build/typesense \
-#                 -v typesense-bazel-cache:/root/.cache/bazel \
-#                 -v"$(pwd)"/typesense-data:/data \
-#                 -e TYPESENSE_TARGET=typesense-server \
-#                 typesense-builder \
-#                 --data-dir=/data \
-#                 --api-key=xyz \
-#                 --enable-cors
+# docker run -p 8108:8108 -v "$(pwd)":/build/typesense -v typesense-bazel-cache:/root/.cache/bazel -v"$(pwd)"/typesense-data:/data -e TYPESENSE_TARGET=typesense-server typesense-builder --data-dir=/data --api-key=xyz --enable-cors
 #
 # Build & Test entire test suite:
 #    docker run -v "$(pwd)":/build/typesense \
@@ -98,7 +89,21 @@ RUN BAZEL_ARCH=$(cat /tmp/bazel_arch.txt) \
 WORKDIR /build/typesense
 
 # Script to handle build and run commands
-COPY docker/development-macos-entrypoint.sh /usr/local/bin/
-RUN chmod +x /usr/local/bin/development-macos-entrypoint.sh
+COPY ./docker/development-macos-entrypoint.sh /usr/local/bin/
+RUN chmod +x /usr/local/bin/development-macos-entrypoint.sh && \
+    sed -i 's/\r$//' /usr/local/bin/development-macos-entrypoint.sh && \
+    head -1 /usr/local/bin/development-macos-entrypoint.sh
 
-ENTRYPOINT ["/usr/local/bin/development-macos-entrypoint.sh"] 
+# ENTRYPOINT ["/usr/local/bin/development-macos-entrypoint.sh"] 
+
+
+# docker run -p 8108:8108 `
+#   -v "${PWD}:/build/typesense" `
+#   -v typesense-bazel-cache:/root/.cache/bazel `
+#   -v "${PWD}/typesense-data:/data" `
+#   -e TYPESENSE_TARGET=typesense-server `
+#   -v ./docker/development_macos_entrypoint.sh:/usr/local/bin/development-macos-entrypoint.sh `
+#   typesense-builder `
+#   --data-dir=/data `
+#   --api-key=xyz `
+#   --enable-cors

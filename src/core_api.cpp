@@ -25,6 +25,8 @@
 #include "sole.hpp"
 #include "natural_language_search_model_manager.h"
 #include "natural_language_search_model.h"
+#include <s2/s2cell_id.h>
+#include <s2/s2latlng.h>
 
 using namespace std::chrono_literals;
 
@@ -788,6 +790,13 @@ bool get_search(const std::shared_ptr<http_req>& req, const std::shared_ptr<http
 
     nlohmann::json results_json = nlohmann::json::parse(results_json_str);
     NaturalLanguageSearchModelManager::add_nl_query_data_to_results(results_json, &(req->params), nl_search_time_ms);
+    
+    // Apply clustering if cluster_radius parameter is provided
+    const auto cluster_radius_it = req->params.find("cluster_radius");
+    if(cluster_radius_it != req->params.end()) {
+        apply_geosearch_clustering(results_json, cluster_radius_it->second);
+    }
+    
     results_json_str = results_json.dump();
 
     // if the response is an event stream, we need to add the data: prefix
@@ -3886,4 +3895,124 @@ bool delete_nl_search_model(const std::shared_ptr<http_req>& req, const std::sha
 
     res->set_200(model.dump());
     return true;
+}
+
+// Helper function to parse radius string (e.g., "1km" -> 1000 meters)
+double parse_radius_to_meters(const std::string& radius_str) {
+    if(radius_str.empty()) return 1000.0; // default 1km
+    
+    // Find the number part and unit part
+    size_t unit_pos = 0;
+    while(unit_pos < radius_str.length() && 
+          (std::isdigit(radius_str[unit_pos]) || radius_str[unit_pos] == '.')) {
+        unit_pos++;
+    }
+    
+    if(unit_pos == 0) return 1000.0; // no number found, default
+    
+    double value = std::stod(radius_str.substr(0, unit_pos));
+    std::string unit = radius_str.substr(unit_pos);
+    
+    // Convert to lowercase for comparison
+    std::transform(unit.begin(), unit.end(), unit.begin(), ::tolower);
+    
+    if(unit == "km") {
+        return value * 1000.0;
+    } else if(unit == "mi") {
+        return value * 1609.34;
+    } else if(unit == "m" || unit.empty()) {
+        return value;
+    }
+    
+    return 1000.0; // default if unit not recognized
+}
+
+// Convert radius in meters to appropriate S2 cell level
+int radius_to_s2_level(double radius_meters) {
+    // S2 cell sizes approximately:
+    // Level 15: ~2.2km
+    // Level 16: ~1.1km  
+    // Level 17: ~550m
+    // Level 18: ~275m
+    // Level 19: ~137m
+    // Level 20: ~69m
+    
+    if(radius_meters >= 2000) return 15;
+    else if(radius_meters >= 1000) return 16;
+    else if(radius_meters >= 500) return 17;
+    else if(radius_meters >= 250) return 18;
+    else if(radius_meters >= 125) return 19;
+    else return 20;
+}
+
+void apply_geosearch_clustering(nlohmann::json& results_json, const std::string& cluster_radius) {
+    if(!results_json.contains("hits") || !results_json["hits"].is_array()) {
+        return; // No hits to cluster
+    }
+    
+    double radius_meters = parse_radius_to_meters(cluster_radius);
+    int s2_level = radius_to_s2_level(radius_meters);
+    
+    // Map from S2 cell ID to list of document indices
+    std::unordered_map<uint64_t, std::vector<size_t>> cell_to_docs;
+    
+    auto& hits = results_json["hits"];
+    
+    // Group documents by S2 cell
+    for(size_t i = 0; i < hits.size(); ++i) {
+        auto& hit = hits[i];
+        if(!hit.contains("document")) continue;
+        
+        auto& doc = hit["document"];
+        
+        // Find geopoint fields - check all fields for geopoint arrays
+        for(auto& [field_name, field_value] : doc.items()) {
+            if(field_value.is_array() && field_value.size() >= 2 && 
+               field_value[0].is_number() && field_value[1].is_number()) {
+                
+                double lat = field_value[0].get<double>();
+                double lng = field_value[1].get<double>();
+                
+                // Convert to S2 cell ID
+                S2LatLng latlng = S2LatLng::FromDegrees(lat, lng);
+                S2CellId cell_id = S2CellId(latlng).parent(s2_level);
+                
+                cell_to_docs[cell_id.id()].push_back(i);
+                break; // Only process first geopoint field found
+            }
+        }
+    }
+    
+    // Add cluster information to results
+    std::unordered_map<uint64_t, size_t> cell_to_cluster_id;
+    size_t cluster_counter = 0;
+    
+    for(auto& [cell_id, doc_indices] : cell_to_docs) {
+        cell_to_cluster_id[cell_id] = cluster_counter++;
+    }
+    
+    // Add cluster_id to each document
+    for(auto& [cell_id, doc_indices] : cell_to_docs) {
+        size_t cluster_id = cell_to_cluster_id[cell_id];
+        for(size_t doc_idx : doc_indices) {
+            hits[doc_idx]["cluster_id"] = cluster_id;
+        }
+    }
+    
+    // Add cluster summary to results
+    nlohmann::json clusters = nlohmann::json::array();
+    for(auto& [cell_id, doc_indices] : cell_to_docs) {
+        nlohmann::json cluster_info;
+        cluster_info["cluster_id"] = cell_to_cluster_id[cell_id];
+        cluster_info["document_count"] = doc_indices.size();
+        cluster_info["s2_cell_id"] = std::to_string(cell_id);
+        clusters.push_back(cluster_info);
+    }
+    
+    results_json["clusters"] = clusters;
+    results_json["clustering"] = {
+        {"applied", true},
+        {"radius", cluster_radius},
+        {"s2_level", s2_level}
+    };
 }
